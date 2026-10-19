@@ -1,0 +1,9 @@
+pandas
+numpy
+matplotlib
+scikit-learn
+kagglehub
+torch
+tqdm
+ipykernel
+jupyter

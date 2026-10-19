@@ -1,0 +1,61 @@
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Jupyter
+.ipynb_checkpoints/
+
+# VS Code
+.vscode/
+
+# PyCharm
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Environment variables / secrets
+.env
+*.env
+
+# Kaggle credentials
+kaggle.json
+
+# Data files
+data/
+*.csv
+*.zip
+*.parquet
+
+# Model checkpoints
+models/
+checkpoints/
+*.pt
+*.pth
+*.ckpt
+
+# Logs
+logs/
+*.log
+
+# Temporary files
+tmp/
+temp/
+
+# Python packaging
+build/
+dist/
+*.egg-info/
+
+# Coverage / testing
+.pytest_cache/
+.coverage
+htmlcov/
