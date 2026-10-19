@@ -1,565 +1,194 @@
-# LLM Preference Learning with Reward Models
+LLM Preference Modeling with Transformer Reward Models
+This project explores how to predict human preferences between two LLM responses to the same prompt.
 
-This project explores how to predict human preferences between two candidate LLM responses using transformer-based reward models.
+The work started as a standard 3-class classification problem and progressively moved toward pairwise reward modeling, where a shared transformer scores each response independently and the score difference is used to model preference.
 
-It began as a 3-class classification task for the Kaggle `llm-classification-finetuning` dataset, where the objective is to predict whether **Response A wins**, **Response B wins**, or the result is a **tie**.
+The experiments are based on the Kaggle llm-classification-finetuning dataset and were run primarily in Kaggle notebooks.
+Problem
+Each training example contains:
+- a user prompt
+- response_a
+- response_b
+- one outcome:
+  - Model A wins
+  - Model B wins
+  - Tie
+The main evaluation metric is multiclass log loss.
 
-The project has since evolved into a broader preference-learning pipeline focused on:
-
-- transformer fine-tuning
-- pairwise reward modelling
-- custom loss design
-- calibration
-- controlled hyperparameter experiments
-- failure analysis
-- reproducible model evaluation
-
----
-
-## Problem Setup
-
-Each sample contains:
-
-```text
-prompt
-response_a
-response_b
-winner_model_a
-winner_model_b
-winner_tie
-
-The target is converted into:
-0 = Response A wins
-1 = Response B wins
-2 = Tie
-
-The main evaluation metric is:
-Multiclass Log Loss
-
-Lower is better.
-Dataset Split
-A deterministic stratified split is used with:
-SEED = 42
-
-
-Resulting dataset sizes:
-Train:      34,485
-Validation: 11,496
-Held-out:   11,496
-
-The held-out split is kept untouched during model development.
-
-It will only be used after all model-selection decisions are finalized.
-Experimental Progression
-1. Classical Baseline
-The first baseline used:
-TF-IDF
-+
-Logistic Regression
-
-Results:
+The project deliberately does not use model_a or model_b identity as predictive features. The goal is to learn from the prompt and response content rather than memorize model-specific tendencies.
+Project Evolution
+The notebook documents an iterative modeling process:
+TF-IDF + Logistic Regression
+        ↓
+Transformer classification
+        ↓
+DistilBERT / DeBERTa comparison
+        ↓
+Truncation and sequence-allocation experiments
+        ↓
+Full fine-tuning vs freezing vs LoRA
+        ↓
+Pairwise reward modeling
+        ↓
+Probability calibration for 3-class log loss
+1. Baseline
+A TF-IDF + Logistic Regression model was used as the initial benchmark.
 Model	Validation Accuracy	Validation Log Loss
-TF-IDF + Logistic Regression	0.371	1.114
+TF-IDF + Logistic Regression	0.3713	1.1143
 
 
-This provided a simple non-transformer benchmark.
+This established that simple lexical features were not sufficient for the preference task.
 2. Transformer Classification
-The next stage fine-tuned pretrained transformer models directly as 3-class classifiers.
-
-Models tested included:
+The first neural approach treated the problem as direct 3-class sequence classification.
 DistilBERT
+A DistilBERT pilot improved performance to:
+Model	Validation Accuracy	Validation Log Loss
+DistilBERT pilot	0.4040	1.0850
+
+
+This showed that contextual transformer representations were substantially more useful than TF-IDF features.
 DeBERTa-v3-small
+DeBERTa-v3-small was also tested as a 3-class classifier.
 
-Experiments included:
-- full fine-tuning
-- frozen transformer layers
-- LoRA
-- different learning rates
-- different sequence lengths
-- different truncation strategies
-Full fine-tuning consistently performed better than the tested LoRA and freezing configurations.
-3. Sequence-Length Analysis
-Token-length profiling showed that aggressive truncation removed a large amount of useful information.
+Its validation log loss was nearly identical to the DistilBERT pilot, so the project shifted toward improving the task formulation rather than only changing the backbone.
+3. Truncation and Sequence-Length Experiments
+A major issue was that prompt and response pairs can be long enough to exceed the model token budget.
 
-Percentage of examples where at least one response exceeded the maximum length:
-Max Length	Either Response Truncated
-256	71.8%
-384	54.3%
-512	37.5%
+Several strategies were explored:
+- fixed token allocation
+- sentence-aware truncation
+- dynamic allocation between prompt, Response A, and Response B
+- proportional allocation based on response length
+- larger sequence budgets
+The experiments showed that truncation strategy materially affects the amount of useful response content available to the model.
+4. Fine-Tuning Strategy Experiments
+The notebook compares multiple training strategies for DistilBERT.
+Full Fine-Tuning
+Full fine-tuning produced the strongest classifier result among the tested parameter-efficient alternatives.
 
+One recorded configuration achieved:
+Accuracy: 0.3860
+Log loss: 1.082666
+Freezing Lower Layers
+The bottom three DistilBERT layers were frozen to reduce the number of trainable parameters.
 
-A pilot experiment also showed that:
-512 tokens > 384 tokens
+This reduced the trainable proportion to about 68.2%, but did not reduce runtime meaningfully and worsened validation log loss.
+LoRA
+LoRA was tested as a parameter-efficient fine-tuning method.
 
-for both validation accuracy and log loss.
+Only about 1.09% of model parameters were trainable.
 
-The current setup therefore uses:
-MAX_LENGTH = 512
+A learning-rate sweep showed that LoRA needed a much larger learning rate than full fine-tuning. Performance improved strongly around 2e-4 to 3e-4, but still did not beat full fine-tuning on validation log loss.
+5. Pairwise Reward Modeling
+The main change in project direction was to reformulate the task as pairwise preference learning.
 
-
-Pairwise Reward Modelling
-The project then moved away from direct 3-class classification.
-
-Instead, a shared model scores each response independently against the prompt.
-(prompt, response_a)
-        ↓
-shared reward model
-        ↓
-reward_a
-
-(prompt, response_b)
-        ↓
-shared reward model
-        ↓
-reward_b
-
-The pairwise preference margin is:
+Instead of asking one model to directly classify A / B / Tie from a concatenated example, each candidate response is scored independently against the prompt using the same network:
+(prompt, response_a) -> shared reward model -> reward_a
+(prompt, response_b) -> shared reward model -> reward_b
+The preference margin is then:
 \[
 d = r_A - r_B
 \]
-where:
-d > 0  → prefer A
-d < 0  → prefer B
-d ≈ 0  → tie
-
-The same model is used for both responses.
-
-This ensures that A and B are evaluated using the same scoring function.
-Reward Model Architecture
-The reward model uses:
-AutoModelForSequenceClassification(    model_name,    num_labels=1)
-
-
-The transformer outputs a single scalar reward.
-
-Conceptually:
-(prompt, response)
-        ↓
-Transformer Encoder
-        ↓
-Scalar Reward
-
-For a pair:
-reward_a = f(prompt, response_a)
-reward_b = f(prompt, response_b)
-
-margin = reward_a - reward_b
-
-Initial Pairwise Loss
-The first reward model used:
-loss_a = F.softplus(-margin)loss_b = F.softplus(margin)
+Interpretation:
+- d > 0: preference toward Response A
+- d < 0: preference toward Response B
+- d ≈ 0: tie-like example
+The same reward model is used for both responses, which makes the architecture naturally symmetric with respect to A and B.
+Pairwise Training Objective
+For the first reward-model experiment:
+- A-win examples encourage a positive margin
+- B-win examples encourage a negative margin
+- tie examples encourage the margin toward zero
+The model uses a shared DistilBERT encoder with a scalar output head.
+6. Reward-Model Results
+The first full-data reward-model experiment was trained on:
+Train rows:      34,485
+Validation rows: 11,496
+After calibration, it achieved:
+Model	Validation Accuracy	Validation Log Loss
+DistilBERT Pairwise Reward Model	0.4353	1.05375
 
 
-For ties, the model was encouraged to keep:
-margin ≈ 0
+This was a clear improvement in accuracy over the earlier direct-classification experiments and established reward modeling as the main direction of the project.
+7. Probability Calibration
+The reward model naturally outputs a single margin, but the competition requires probabilities for three classes.
 
-This already improved over the earlier direct classification models.
-
-Using DistilBERT, the pairwise reward model achieved approximately:
-Validation Accuracy: 0.435
-Validation Log Loss: 1.054
-
-Margin-Aware Reward Loss
-The loss was then modified to explicitly define preference regions.
-
-For a preference margin \(m\):
+The margin is transformed into three logits:
 \[
-A\ wins: d > m
+[A, B, Tie] = [d-\tau, -d-\tau, 0]
 \]
-\[
-B\ wins: d < -m
-\]
-\[
-Tie: |d| \le m
-\]
-The implementation is:
-loss_a = F.softplus(m - margin)loss_b = F.softplus(m + margin)tie_violation = F.relu(    torch.abs(margin) - m)loss_tie = tie_violation ** 2
-
-
-This creates a clearer separation between:
-A preference
-Tie region
-B preference
-
-DistilBERT Reward Model
-Using the margin-aware loss, DistilBERT achieved approximately:
-Validation Accuracy: 0.436
-Validation Log Loss: 1.051
-
-This became the strongest DistilBERT configuration.
-
-Key setup:
-Backbone: distilbert-base-uncased
-Max length: 512
-Learning rate: 1e-5
-Preference margin: 0.2
-Batch size: 8
-Seed: 42
-
-DeBERTa Reward Model
-The same reward-model architecture was then transferred to:
-microsoft/deberta-v3-small
-
-The initial DeBERTa run failed because of numerical instability.
-
-Training produced:
-Training Loss: 0
-Validation Loss: NaN
-
-Further debugging showed:
-reward_a = NaN
-reward_b = NaN
-margin = NaN
-
-The model was unintentionally operating in FP16.
-
-The issue was fixed by forcing strict FP32 training:
-fp16=Falsebf16=False
-
-
-and validating model outputs before training.
-
-A fresh forward pass then produced:
-Finite parameters: True
-Finite reward_a: True
-Finite reward_b: True
-Finite margin: True
-Finite loss: True
-
-DeBERTa Training Behaviour
-A 2-epoch run produced:
-Epoch	Training Loss	Validation Loss
-1	0.5355	0.5217
-2	0.5107	0.5256
-
-
-Training loss improved, but validation loss worsened after Epoch 1.
-
-This indicates early overfitting.
-
-The best checkpoint was therefore around:
-Epoch 1
-
-Calibration
-The raw reward margin is converted into three class logits:
-\[
-[A, B, Tie]
-=
-[d-\tau,\ -d-\tau,\ 0]
-\]
-The logits are then temperature-scaled:
-\[
-z \leftarrow \frac{z}{T}
-\]
-followed by softmax.
-
-The calibration parameters are selected using validation log loss.
-
-The search includes:
-tau
-temperature
-
-A recurring result across experiments is:
-best_tau = 0
-
-This means the model assigns meaningful probability mass to ties, but tie is rarely selected as the hard argmax prediction.
-
-Because the Kaggle metric is log loss, calibrated probability quality is more important than hard classification accuracy.
-Best DeBERTa Result
-A strong DeBERTa run achieved:
-Validation Accuracy:
-0.4504
-
-Validation Log Loss:
-1.04045
-
-Margin statistics:
-A wins mean margin:
-+0.141
-
-B wins mean margin:
--0.153
-
-Tie mean margin:
-+0.001
-
-This shows that the model learned the expected structure:
-A wins → positive margin
-B wins → negative margin
-Tie    → close to zero
-
-Comparison:
-Model	Accuracy	Log Loss
-TF-IDF + Logistic Regression	0.371	1.114
-DistilBERT Reward Model	~0.436	~1.051
-DeBERTa Reward Model	~0.450	~1.040
-
-
-DeBERTa currently provides the strongest performance.
-Preference-Margin Sweep
-A controlled sweep was run over:
-0.1
-0.2
-0.3
-
-while keeping the following fixed:
-Backbone
-Train/validation split
-Sequence length
-Batch size
-Learning rate
-Number of epochs
-Seed
-Calibration procedure
-
-Results:
-Preference Margin	Accuracy	Calibrated Log Loss
-0.1	0.44998	1.04126
-0.2	0.44885	1.04227
-0.3	0.45024	1.04248
-
-
-Increasing the preference margin increased raw A/B separation.
-
-Example:
-Margin 0.1
-A mean: +0.124
-B mean: -0.134
-
-Margin 0.2
-A mean: +0.144
-B mean: -0.156
-
-Margin 0.3
-A mean: +0.165
-B mean: -0.177
-
-However, larger separation did not improve calibrated log loss.
-
-The current preferred value is therefore:
-PREFERENCE_MARGIN = 0.1
-
-
-The differences are small, so final selection is made using controlled experiments rather than a single isolated run.
-Current Hyperparameter Setup
-The current DeBERTa configuration is:
-Model:
-microsoft/deberta-v3-small
-
-Max sequence length:
-512
-
-Batch size:
-8
-
-Epochs:
-1
-
-Precision:
-FP32
-
-Seed:
-42
-
-Preference margin:
-0.1
-
-Learning rate:
-currently being tuned
-
-Learning-Rate Sweep
-The final major reward-model hyperparameter being tested is learning rate.
-
-Planned values:
-5e-6
-1e-5
-2e-5
-
-Everything else is held constant.
-
-The final learning rate will be selected using:
-calibrated validation log loss
-
-Model Selection Strategy
-The project follows a controlled experimental process.
-
-For each experiment:
-1. Change one variable
-2. Keep everything else fixed
-3. Train on the same training split
-4. Evaluate on the same validation split
-5. Calibrate probabilities
-6. Compare multiclass log loss
-7. Record the result
-
-The untouched held-out set is not used for tuning.
-
-Final evaluation will only happen after all decisions are frozen.
-Key Findings
-So far, the project has found that:
-- Pairwise reward modelling outperforms direct 3-class classification.
-- DeBERTa outperforms DistilBERT for this task.
-- Full fine-tuning outperforms the tested LoRA configuration.
-- Longer context improves performance.
-- 512 tokens performs better than shorter tested contexts.
-- Training beyond one epoch begins to overfit.
-- Explicit margin-aware losses improve reward-model structure.
-- Larger preference margins increase separation but do not necessarily improve log loss.
-- Temperature calibration improves probability quality.
-- Tie handling remains the hardest part of the task.
-- FP32 is substantially more stable than FP16 for the current DeBERTa setup.
-Debugging and Failure Analysis
-The project also involved investigating several real training failures.
-
-Examples include:
-NaN rewards
-NaN margins
-NaN validation loss
-FP16 instability
-GPU precision issues
-disk-space failures
-overfitting
-truncation loss
-weak tie predictions
-
-Instead of only recording successful models, these failures were used to guide subsequent experiments.
-
-This forms an important part of the research workflow.
-Current Project Direction
-The current pipeline is:
-Classical Baseline
-        ↓
-Transformer Classification
-        ↓
-Full Fine-Tuning / LoRA / Freezing Experiments
-        ↓
-Pairwise Reward Modelling
-        ↓
-Margin-Aware Reward Loss
-        ↓
-Sequence-Length Tuning
-        ↓
-DeBERTa Transfer
-        ↓
-Calibration
-        ↓
-Preference-Margin Sweep
-        ↓
-Learning-Rate Sweep
-        ↓
-Final Model Selection
-
-Possible final extensions include:
-Checkpoint Ensembling
-DPO / Preference Optimization
-Final Held-Out Evaluation
-
-Checkpoint Ensembling
-One possible final experiment is to ensemble several checkpoints around the validation optimum.
-
-Instead of using only one checkpoint:
-checkpoint_1
-checkpoint_2
-checkpoint_3
-
-their calibrated probabilities can be averaged:
-\[
-p_{ensemble}
-=
-\frac{1}{K}
-\sum_{k=1}^{K} p_k
-\]
-This may reduce overconfidence and improve log loss.
-
-This will only be kept if it improves validation performance over the best single checkpoint.
-Future Preference Optimization
-A possible extension is Direct Preference Optimization (DPO).
-
-The current dataset naturally provides preference pairs:
-prompt
-chosen response
-rejected response
-
-For non-tie examples:
-A wins:
-chosen = A
-rejected = B
-
-B wins:
-chosen = B
-rejected = A
-
-Standard DPO does not naturally support ties, so tie samples would require separate treatment or exclusion from the DPO training stage.
-
-DPO would be treated as a separate post-training experiment rather than a direct replacement for the current 3-class reward model.
-Repository Structure
-The main experimental work is contained in the Kaggle notebook included in this repository.
-
-Example structure:
-.
-├── main2.ipynb
-├── README.md
-└── ...
-
-The notebook contains:
-EDA
-Data preprocessing
-Train / validation / held-out splitting
-TF-IDF baseline
-Transformer classifiers
-LoRA experiments
-Layer-freezing experiments
-Token-length profiling
-Pairwise reward modelling
-Custom losses
-DeBERTa experiments
-Calibration
-Hyperparameter sweeps
-Failure analysis
-Model evaluation
-
+The logits are then divided by a temperature before softmax.
+
+A grid search is used to optimize:
+- tau: tie-region adjustment
+- temperature: confidence calibration
+For Experiment 11, the best validation calibration was:
+Best tau:         0.0
+Best temperature: 0.7971
+Validation acc:   0.4353
+Validation loss:  1.05375
+Mean predicted probabilities were approximately:
+A:   0.3407
+B:   0.3408
+Tie: 0.3185
+This is important because the competition is scored using log loss, so well-calibrated probabilities matter more than hard-class accuracy alone.
+Data Split
+A deterministic stratified split with seed 42 is used throughout the project.
+Train:      34,485
+Validation: 11,496
+Held-out:   11,496
+The held-out split is reserved for final evaluation after model-selection decisions are complete.
 Tech Stack
-Python
-PyTorch
-Hugging Face Transformers
-Hugging Face Datasets
-scikit-learn
-NumPy
-pandas
-Kaggle GPUs
+- Python
+- PyTorch
+- Hugging Face Transformers
+- Hugging Face Datasets
+- PEFT / LoRA
+- scikit-learn
+- pandas
+- NumPy
+- Kaggle GPUs
+Repository Structure
+.
+├── main2.ipynb   # Main experiment notebook exported from Kaggle
+└── README.md
+The notebook contains the full experimental history, including unsuccessful approaches and debugging steps. This is intentional: the project is structured as an iterative research workflow rather than only presenting the final model.
+Key Findings So Far
+- Transformer models substantially outperform the TF-IDF baseline.
+- Better model architecture alone did not solve the task; the problem formulation mattered more.
+- Truncation is a major constraint because many prompt-response pairs are long.
+- Full fine-tuning outperformed the tested freezing and LoRA configurations.
+- LoRA was highly parameter-efficient, but required much higher learning rates and did not beat full fine-tuning.
+- Pairwise reward modeling was a better fit for the preference structure of the dataset than direct 3-class classification.
+- Calibration is necessary to convert reward margins into useful 3-class probabilities for log loss.
+- Tie prediction remains one of the hardest parts of the task.
+Current Direction
+The project is now focused on improving the pairwise reward-modeling approach rather than continuing to treat the problem as ordinary sequence classification.
 
-Project Goal
-The goal of this project is not only to improve Kaggle performance.
+The next stages are to:
+1. refine the reward-model objective and backbone
+2. tune the most important hyperparameters with controlled experiments
+3. explore checkpoint/probability ensembling if it improves validation log loss
+4. freeze all modeling decisions
+5. evaluate once on the untouched held-out split
+A separate preference-optimization experiment, such as DPO, may also be added later as an extension to the reward-modeling work.
+Motivation
+The goal of this project is not only to improve a Kaggle score.
 
-It is also an applied study of the LLM preference-learning and post-training workflow.
-
-The project progresses through:
+It is also a practical study of the workflow used in modern LLM fine-tuning and post-training:
 baseline
-    ↓
-fine-tuning
-    ↓
-reward modelling
-    ↓
-custom objective design
-    ↓
+  ↓
+transformer fine-tuning
+  ↓
 controlled ablations
-    ↓
-calibration
-    ↓
-failure analysis
-    ↓
-model selection
-
-The broader aim is to develop practical experience in:
-LLM fine-tuning
-Preference learning
-Reward modelling
-PyTorch
-Hugging Face
-Model calibration
-Experimental design
-Hyperparameter tuning
-Research-style iteration
-
-The project is still in progress, with the learning-rate sweep and final model-selection experiments remaining.
-```
+  ↓
+parameter-efficient fine-tuning
+  ↓
+pairwise preference learning
+  ↓
+reward modeling
+  ↓
+probability calibration
+  ↓
+final evaluation
+The project is intended to build hands-on experience with model fine-tuning, preference learning, reward modeling, experimental design, evaluation, and failure analysis.
