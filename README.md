@@ -1,9 +1,9 @@
-LLM Preference Modeling with Transformer Reward Models
+# LLM Preference Modeling with Transformer Reward Models
 This project explores how to predict human preferences between two LLM responses to the same prompt.
 
 The work started as a standard 3-class classification problem and progressively moved toward pairwise reward modeling, where a shared transformer scores each response independently and the score difference is used to model preference.
 
-The experiments are based on the Kaggle llm-classification-finetuning dataset and were run primarily in Kaggle notebooks.
+# The experiments are based on the Kaggle llm-classification-finetuning dataset and were run primarily in Kaggle notebooks.
 Problem
 Each training example contains:
 - a user prompt
@@ -16,7 +16,8 @@ Each training example contains:
 The main evaluation metric is multiclass log loss.
 
 The project deliberately does not use model_a or model_b identity as predictive features. The goal is to learn from the prompt and response content rather than memorize model-specific tendencies.
-Project Evolution
+
+# Project Evolution
 The notebook documents an iterative modeling process:
 TF-IDF + Logistic Regression
         ↓
@@ -54,7 +55,7 @@ Its validation log loss was nearly identical to the DistilBERT pilot, so the pro
 3. Truncation and Sequence-Length Experiments
 A major issue was that prompt and response pairs can be long enough to exceed the model token budget.
 
-Several strategies were explored:
+# Strategies explored:
 - fixed token allocation
 - sentence-aware truncation
 - dynamic allocation between prompt, Response A, and Response B
@@ -132,13 +133,15 @@ A:   0.3407
 B:   0.3408
 Tie: 0.3185
 This is important because the competition is scored using log loss, so well-calibrated probabilities matter more than hard-class accuracy alone.
-Data Split
+
+# Data Split
 A deterministic stratified split with seed 42 is used throughout the project.
 Train:      34,485
 Validation: 11,496
 Held-out:   11,496
 The held-out split is reserved for final evaluation after model-selection decisions are complete.
-Tech Stack
+
+# Tech Stack
 - Python
 - PyTorch
 - Hugging Face Transformers
@@ -147,8 +150,9 @@ Tech Stack
 - scikit-learn
 - pandas
 - NumPy
-- Kaggle GPUs
-Repository Structure
+- Kaggle GPUs (T4)
+
+# Repository Structure
 .
 ├── main2.ipynb   # Main experiment notebook exported from Kaggle
 └── README.md
@@ -165,14 +169,15 @@ Key Findings So Far
 Current Direction
 The project is now focused on improving the pairwise reward-modeling approach rather than continuing to treat the problem as ordinary sequence classification.
 
-The next stages are to:
+# Next stages:
 1. refine the reward-model objective and backbone
 2. tune the most important hyperparameters with controlled experiments
 3. explore checkpoint/probability ensembling if it improves validation log loss
 4. freeze all modeling decisions
 5. evaluate once on the untouched held-out split
 A separate preference-optimization experiment, such as DPO, may also be added later as an extension to the reward-modeling work.
-Motivation
+
+# Motivation
 The goal of this project is not only to improve a Kaggle score.
 
 It is also a practical study of the workflow used in modern LLM fine-tuning and post-training:
@@ -191,4 +196,5 @@ reward modeling
 probability calibration
   ↓
 final evaluation
-The project is intended to build hands-on experience with model fine-tuning, preference learning, reward modeling, experimental design, evaluation, and failure analysis.
+
+The project is intended to build personal hands-on experience with model fine-tuning, preference learning, reward modeling, experimental design, evaluation, and failure analysis.
