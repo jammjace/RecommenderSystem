@@ -3,8 +3,9 @@ This project explores how to predict human preferences between two LLM responses
 
 The work started as a standard 3-class classification problem and progressively moved toward pairwise reward modeling, where a shared transformer scores each response independently and the score difference is used to model preference.
 
-# The experiments are based on the Kaggle llm-classification-finetuning dataset and were run primarily in Kaggle notebooks.
-Problem
+The experiments are based on the Kaggle llm-classification-finetuning dataset and were run primarily in Kaggle notebooks.
+
+# Problem
 Each training example contains:
 - a user prompt
 - response_a
